@@ -383,23 +383,174 @@ Y con esto termino la presentación. ¿Hay alguna pregunta?"
 
 ## 💻 DEMOSTRACIÓN PRÁCTICA CON AWS
 
-### Arquitectura de la Demo
+### 🎯 Objetivo de la Demo
 
-Vamos a crear:
-1. **3 instancias EC2** simulando servidores web
-2. **Application Load Balancer** distribuyendo tráfico
-3. **Aplicación web simple** respondiendo desde cada servidor
-4. **Chaos Monkey** terminando instancias aleatoriamente
+Demostrar cómo un sistema bien diseñado puede sobrevivir a fallas aleatorias de servidores usando principios de Chaos Engineering.
+
+### 📐 Arquitectura de la Demo - Componentes y su Propósito
+
+#### 1. **VPC (Virtual Private Cloud)** - Red Aislada
+   - **Qué es**: Una red virtual privada en AWS
+   - **Para qué sirve**: Aislar nuestra infraestructura del resto de AWS
+   - **Configuración**: CIDR 10.0.0.0/16 (65,536 IPs disponibles)
+
+#### 2. **2 Availability Zones (AZs)** - Alta Disponibilidad
+   - **Qué son**: Centros de datos físicamente separados en la misma región
+   - **Para qué sirven**: Si un centro de datos falla, el otro sigue funcionando
+   - **Configuración**: 
+     - AZ1: us-east-1a con subnet 10.0.1.0/24
+     - AZ2: us-east-1b con subnet 10.0.2.0/24
+
+#### 3. **Internet Gateway** - Conexión a Internet
+   - **Qué es**: Puerta de enlace que conecta la VPC con Internet
+   - **Para qué sirve**: Permite que los usuarios accedan a nuestros servidores
+   - **Configuración**: Asociado a la VPC y rutas configuradas
+
+#### 4. **3 Instancias EC2** - Servidores Web
+   - **Qué son**: Máquinas virtuales ejecutando Linux
+   - **Para qué sirven**: Hospedar la aplicación web
+   - **Configuración**:
+     - Tipo: t2.micro (1 vCPU, 1GB RAM) - Capa gratuita
+     - AMI: Amazon Linux 2023
+     - Distribución: 2 en AZ1, 1 en AZ2 (para demostrar multi-AZ)
+     - Software: Apache HTTP Server
+     - Tag especial: `ChaosMonkey=enabled` (para identificarlas)
+
+#### 5. **Application Load Balancer (ALB)** - Distribuidor de Tráfico
+   - **Qué es**: Balanceador de carga de capa 7 (HTTP/HTTPS)
+   - **Para qué sirve**: 
+     - Distribuir tráfico entre los 3 servidores
+     - Detectar servidores caídos y dejar de enviarles tráfico
+     - Proporcionar un único punto de entrada (DNS)
+   - **Configuración**:
+     - Distribuido en ambas AZs (multi-AZ)
+     - Health checks cada 30 segundos
+     - Puerto 80 (HTTP)
+
+#### 6. **Target Group** - Grupo de Destinos
+   - **Qué es**: Objeto lógico que agrupa las instancias EC2
+   - **Para qué sirve**: El ALB usa esto para saber a qué servidores enviar tráfico
+   - **Configuración**:
+     - Health check path: `/` (página principal)
+     - Healthy threshold: 2 checks consecutivos exitosos
+     - Unhealthy threshold: 2 checks consecutivos fallidos
+
+#### 7. **Security Groups** - Firewall Virtual
+   - **Qué son**: Reglas de firewall para controlar tráfico
+   - **Para qué sirven**: Seguridad - solo permitir tráfico necesario
+   - **Configuración**:
+     - ALB SG: Permite HTTP (puerto 80) desde Internet
+     - EC2 SG: Permite HTTP desde ALB y SSH para administración
+
+#### 8. **Auto Scaling Group (ASG)** - Auto-Recuperación
+   - **Qué es**: Servicio que gestiona automáticamente el número de instancias
+   - **Para qué sirve**: Cuando Chaos Monkey termina una instancia, ASG lanza una nueva automáticamente
+   - **Configuración**:
+     - Mínimo: 2 instancias (nunca menos)
+     - Deseado: 3 instancias (estado normal)
+     - Máximo: 6 instancias (si hay mucho tráfico)
+     - Health check type: ELB (usa el health check del ALB)
+
+#### 9. **CloudWatch Alarms** - Monitoreo y Alertas
+   - **Qué es**: Servicio de monitoreo de AWS
+   - **Para qué sirve**: 
+     - Monitorear CPU de las instancias
+     - Disparar scaling automático si CPU > 70% (scale up) o < 30% (scale down)
+   - **Configuración**:
+     - Alarm de Scale Up: CPU > 70% por 2 minutos
+     - Alarm de Scale Down: CPU < 30% por 5 minutos
+
+#### 10. **Chaos Monkey Script** - Generador de Caos
+   - **Qué es**: Script Python personalizado
+   - **Para qué sirve**: Simular fallas terminando instancias aleatoriamente
+   - **Configuración**:
+     - Busca instancias con tag `ChaosMonkey=enabled`
+     - Termina una instancia aleatoria cada X segundos
+     - Registra qué instancia terminó y cuándo
+
+#### 11. **Monitor Script** - Observador del Sistema
+   - **Qué es**: Script Python personalizado
+   - **Para qué sirve**: Mostrar en tiempo real el estado del sistema
+   - **Configuración**:
+     - Verifica cada 5 segundos:
+       - Cuántas instancias están running
+       - Si el ALB responde correctamente
+       - Tiempo de respuesta del ALB
+
+### 🔄 Flujo de Tráfico Completo
+
+```
+Usuario → Internet → Internet Gateway → ALB → Target Group → EC2 (healthy)
+                                         ↓
+                                    Health Check
+                                         ↓
+                                    Si unhealthy: no enviar tráfico
+```
+
+### 🛡️ Mecanismos de Resiliencia Implementados
+
+1. **Redundancia**: 3 servidores en lugar de 1
+2. **Multi-AZ**: Servidores en diferentes centros de datos
+3. **Load Balancing**: Distribución automática de tráfico
+4. **Health Checks**: Detección automática de fallas
+5. **Auto Scaling**: Reemplazo automático de instancias caídas
+6. **Auto-healing**: Sistema se recupera sin intervención manual
+
+### 📊 Resumen Visual de la Arquitectura
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         AWS CLOUD (us-east-1)                    │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │                    VPC: 10.0.0.0/16                        │ │
+│  │                                                            │ │
+│  │              [Internet Gateway]                            │ │
+│  │                      ↓                                     │ │
+│  │         [Application Load Balancer]                        │ │
+│  │          (Distribuido en ambas AZs)                        │ │
+│  │                      ↓                                     │ │
+│  │         [Target Group] ← Health Checks                     │ │
+│  │                      ↓                                     │ │
+│  │  ┌──────────────────────────┬──────────────────────────┐  │ │
+│  │  │   AZ: us-east-1a         │   AZ: us-east-1b         │  │ │
+│  │  │   Subnet: 10.0.1.0/24    │   Subnet: 10.0.2.0/24    │  │ │
+│  │  │                          │                          │  │ │
+│  │  │   [EC2-1] [EC2-2]        │   [EC2-3]                │  │ │
+│  │  │   Apache  Apache         │   Apache                 │  │ │
+│  │  │   t2.micro t2.micro      │   t2.micro               │  │ │
+│  │  └──────────────────────────┴──────────────────────────┘  │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  [Auto Scaling Group]  ← Gestiona instancias                    │
+│  Min: 2 | Desired: 3 | Max: 6                                   │
+│                                                                  │
+│  [CloudWatch Alarms]   ← Monitorea y dispara scaling            │
+│  CPU > 70% → Scale Up | CPU < 30% → Scale Down                  │
+└─────────────────────────────────────────────────────────────────┘
+
+Externos:
+[🐒 chaos_monkey.py] → Termina instancias aleatoriamente
+[📊 monitor.py]      → Observa el estado del sistema en tiempo real
+```
+
+### 🔑 Puntos Clave para Explicar
+
+1. **El ALB es el punto de entrada único**: Los usuarios solo conocen el DNS del ALB, no las IPs de las instancias
+2. **Multi-AZ = Alta Disponibilidad**: Si toda la AZ us-east-1a se cae, us-east-1b sigue funcionando
+3. **Health Checks = Detección automática**: No necesitas monitorear manualmente, el ALB lo hace
+4. **ASG = Auto-recuperación**: El sistema se repara solo, sin intervención humana
+5. **CloudWatch = Escalado inteligente**: El sistema crece o decrece según la demanda
 
 ### Pre-requisitos
 
 ```bash
 # Instalar Terraform
 # Instalar AWS CLI y configurar credenciales
-aws configure
+aws configure --profile aws-academy
 
 # Verificar que tienes acceso
-aws ec2 describe-instances --region us-east-1
+aws ec2 describe-instances --region us-east-1 --profile aws-academy
 ```
 
 ---
@@ -1074,22 +1225,96 @@ Esto es resiliencia en acción. A pesar de que perdimos 2 de 3 servidores, el se
 
 ---
 
-### **MINUTO 12-13: Explicar qué pasó**
+### **MINUTO 12-13: Explicar qué pasó y por qué funcionó**
 
 **Script:**
-"¿Cómo es posible que el sistema siga funcionando?
+"¿Cómo es posible que el sistema siga funcionando? Déjenme explicar paso a paso qué configuramos y cómo trabaja cada componente:
 
-1. **Load Balancer**: Distribuye el tráfico automáticamente. Detecta cuando un servidor no responde y deja de enviarle tráfico.
+#### 🔍 Lo que configuramos:
 
-2. **Health Checks**: El ALB hace checks cada 30 segundos. Si un servidor no responde, lo marca como 'unhealthy'.
+**1. Redundancia Multi-AZ**
+- Configuramos 3 servidores en 2 zonas de disponibilidad diferentes (us-east-1a y us-east-1b)
+- Si un centro de datos completo falla, el otro sigue operando
+- Esto se configuró en Terraform con `availability_zone` y `subnet_id`
 
-3. **Auto-distribución**: El tráfico se redistribuye automáticamente entre los servidores saludables.
+**2. Application Load Balancer (ALB)**
+- El ALB está distribuido en AMBAS zonas de disponibilidad
+- Esto significa que el balanceador mismo no tiene punto único de falla
+- Configuración clave: `subnets = [subnet_1, subnet_2]`
 
-4. **Sin punto único de falla**: Como tenemos múltiples servidores, la pérdida de uno (o dos) no afecta el servicio.
+**3. Health Checks Automáticos**
+- El ALB verifica cada 30 segundos si cada servidor responde
+- Si un servidor no responde 2 veces consecutivas → marcado como 'unhealthy'
+- Si responde 2 veces consecutivas → marcado como 'healthy'
+- Configuración: `health_check { interval = 30, healthy_threshold = 2 }`
 
-Si no hubiéramos diseñado el sistema para ser resiliente, cuando Chaos Monkey terminara el primer servidor, todo el sistema habría caído.
+**4. Target Group**
+- Agrupa las instancias EC2 y mantiene su estado de salud
+- El ALB solo envía tráfico a instancias 'healthy'
+- Cuando Chaos Monkey termina una instancia, el Target Group la detecta inmediatamente
 
-En producción, podríamos agregar Auto Scaling Groups que automáticamente lancen nuevas instancias cuando detecten que algunas fueron terminadas. Así el sistema se auto-repara."
+**5. Auto Scaling Group (ASG)**
+- Configurado con: min=2, desired=3, max=6
+- Cuando detecta que hay menos de 3 instancias, lanza una nueva automáticamente
+- Usa el mismo Launch Template que define: AMI, tipo de instancia, user data, security groups
+- Health check type = ELB (usa el health check del ALB para decidir)
+
+**6. CloudWatch Alarms**
+- Monitorea CPU de las instancias
+- Si CPU > 70% por 2 minutos → dispara scale up (agregar instancias)
+- Si CPU < 30% por 5 minutos → dispara scale down (remover instancias)
+- Esto permite que el sistema se adapte a la carga automáticamente
+
+#### ⚙️ Cómo funciona en la práctica:
+
+**Momento 0: Estado normal**
+```
+3 instancias running → ALB distribuye tráfico entre las 3 → Todo healthy
+```
+
+**Momento 1: Chaos Monkey ataca**
+```
+Chaos Monkey termina EC2-2 → Instancia entra en estado 'terminating'
+```
+
+**Momento 2: ALB detecta (en ~30 segundos)**
+```
+Health check falla → EC2-2 marcada como 'unhealthy' → ALB deja de enviar tráfico
+```
+
+**Momento 3: Tráfico se redistribuye**
+```
+ALB ahora solo envía tráfico a EC2-1 y EC2-3 → Servicio sigue funcionando
+```
+
+**Momento 4: ASG detecta (en ~1-2 minutos)**
+```
+ASG: "Tengo 2 instancias, pero necesito 3" → Lanza nueva instancia EC2-4
+```
+
+**Momento 5: Nueva instancia se inicializa (2-3 minutos)**
+```
+EC2-4 arranca → User data instala Apache → Health check pasa → Marcada como 'healthy'
+```
+
+**Momento 6: Sistema recuperado**
+```
+3 instancias running nuevamente → Sistema vuelve al estado normal
+```
+
+#### 🎯 Por qué esto es importante:
+
+**Sin estos mecanismos:**
+- 1 servidor cae → Todo el sistema cae → Usuarios afectados
+- Necesitas intervención manual para recuperar
+- Tiempo de recuperación: horas
+
+**Con estos mecanismos:**
+- 1 servidor cae → Otros toman la carga → Usuarios NO afectados
+- Sistema se auto-recupera sin intervención
+- Tiempo de recuperación: 2-5 minutos automáticamente
+
+**Esto es Chaos Engineering en acción:** Probamos que nuestro sistema puede sobrevivir a fallas antes de que ocurran en producción con usuarios reales."
 
 ---
 
@@ -1223,5 +1448,106 @@ R: Por eso se empieza en ambientes de prueba, horario laboral, con equipos prepa
 - [ ] Plan B listo (screenshots/video) por si algo falla
 - [ ] Terminales preparadas (3 ventanas: monitor, chaos, AWS CLI)
 - [ ] Navegador abierto con ALB URL
+
+---
+
+## 📖 RESUMEN EJECUTIVO: QUÉ DECIR SOBRE CADA COMPONENTE
+
+### Para explicar durante la presentación:
+
+#### VPC y Networking
+**Qué decir:** "Creamos una red virtual privada (VPC) con 2 subnets en diferentes zonas de disponibilidad. Esto significa que nuestros servidores están físicamente separados en diferentes centros de datos de AWS."
+
+#### Internet Gateway
+**Qué decir:** "El Internet Gateway es la puerta de entrada que conecta nuestra VPC con Internet, permitiendo que los usuarios accedan a nuestra aplicación."
+
+#### Application Load Balancer
+**Qué decir:** "El ALB es el componente clave. Distribuye el tráfico entre nuestros servidores y, lo más importante, detecta automáticamente cuando un servidor falla y deja de enviarle tráfico. Está configurado en ambas zonas de disponibilidad, por lo que el balanceador mismo no tiene punto único de falla."
+
+#### EC2 Instances
+**Qué decir:** "Tenemos 3 servidores web (instancias EC2 t2.micro) ejecutando Apache. Cada uno puede servir la aplicación independientemente. Los distribuimos: 2 en una zona de disponibilidad y 1 en otra. Todos tienen el tag 'ChaosMonkey=enabled' para que nuestro script pueda identificarlos."
+
+#### Target Group
+**Qué decir:** "El Target Group es un objeto lógico que agrupa nuestras instancias y mantiene su estado de salud. El ALB consulta este grupo para saber a qué servidores puede enviar tráfico."
+
+#### Health Checks
+**Qué decir:** "Cada 30 segundos, el ALB verifica si cada servidor responde correctamente. Si falla 2 veces consecutivas, lo marca como 'unhealthy' y deja de enviarle tráfico. Esto es automático, no requiere intervención humana."
+
+#### Auto Scaling Group
+**Qué decir:** "El ASG es el cerebro de la auto-recuperación. Lo configuramos para mantener siempre 3 instancias (mínimo 2, máximo 6). Cuando Chaos Monkey termina una instancia, el ASG detecta que hay menos de 3 y automáticamente lanza una nueva. El sistema se repara solo."
+
+#### CloudWatch Alarms
+**Qué decir:** "CloudWatch monitorea constantemente el uso de CPU. Si sube de 70%, dispara un alarm que le dice al ASG que agregue más instancias. Si baja de 30%, le dice que remueva instancias. Esto permite que el sistema se adapte automáticamente a la carga."
+
+#### Chaos Monkey Script
+**Qué decir:** "Nuestro script de Chaos Monkey es simple pero efectivo. Busca todas las instancias con el tag 'ChaosMonkey=enabled', selecciona una al azar, y la termina. Esto simula una falla real de servidor."
+
+#### Monitor Script
+**Qué decir:** "El script de monitoreo nos muestra en tiempo real qué está pasando: cuántas instancias están corriendo, si el ALB responde, y el tiempo de respuesta. Esto nos permite ver cómo el sistema reacciona a las fallas."
+
+---
+
+## 🎬 GUIÓN SIMPLIFICADO PARA LA DEMO (MINUTO POR MINUTO)
+
+### Minuto 8: Introducción a la demo
+"Ahora vamos a ver esto en acción. He desplegado una infraestructura real en AWS con todos los componentes que mencioné."
+
+### Minuto 9: Mostrar arquitectura
+**[Mostrar diagrama]**
+"Tenemos 3 servidores web distribuidos en 2 zonas de disponibilidad, un Load Balancer que distribuye el tráfico, y un Auto Scaling Group que mantiene el número de instancias."
+
+**[Abrir navegador con ALB]**
+"Cuando accedo al DNS del Load Balancer y refresco, pueden ver cómo el tráfico va rotando entre los 3 servidores diferentes."
+
+### Minuto 10: Iniciar monitoreo
+**[Ejecutar monitor.py]**
+"Voy a iniciar el monitor que nos mostrará en tiempo real el estado de las instancias y si el sistema responde."
+
+### Minuto 11: Liberar Chaos Monkey
+**[Ejecutar chaos_monkey.py]**
+"Y ahora liberemos al mono. Chaos Monkey va a empezar a terminar servidores aleatoriamente cada 30 segundos."
+
+### Minuto 12: Observar resultados
+**[Alternar entre ventanas]**
+"Observen: el monitor muestra que una instancia fue terminada, pero el ALB sigue respondiendo. El sistema sigue funcionando con solo 2 servidores."
+
+**[Refrescar navegador]**
+"Si refresco el navegador, la aplicación sigue funcionando perfectamente. Ya no veo el servidor que fue terminado, pero los otros dos están manejando todo el tráfico."
+
+### Minuto 13: Explicar la magia
+"¿Cómo es posible? Tres mecanismos trabajando juntos:
+1. El ALB detectó que el servidor no respondía y dejó de enviarle tráfico
+2. El tráfico se redistribuyó automáticamente a los servidores saludables
+3. El Auto Scaling Group detectó que falta una instancia y está lanzando una nueva
+
+Todo esto sin intervención humana. El sistema se está reparando solo mientras hablamos."
+
+### Minuto 14: Conclusión
+"Esto es Chaos Engineering: probar que nuestro sistema puede sobrevivir a fallas ANTES de que ocurran en producción con usuarios reales. Es mejor descubrir problemas ahora, de manera controlada, que a las 3 AM cuando todo está caído."
+
+---
+
+## 💡 FRASES CLAVE PARA USAR
+
+1. **"El sistema se repara solo, sin intervención humana"**
+2. **"Esto es producción simulada, no un juguete"**
+3. **"Mejor descubrir problemas ahora que a las 3 AM"**
+4. **"El usuario nunca notó que algo falló"**
+5. **"Esto es resiliencia en acción"**
+6. **"No es SI va a fallar, sino CUÁNDO"**
+7. **"Practicamos las fallas para estar preparados"**
+8. **"El Load Balancer es el guardián que detecta y reacciona"**
+9. **"Multi-AZ significa que un centro de datos completo puede caer y seguimos funcionando"**
+10. **"Auto Scaling es como tener un equipo de ingenieros 24/7 vigilando y reparando"**
+
+---
+
+## 🎓 FIN DEL DOCUMENTO
+
+**Última actualización:** Noviembre 2024  
+**Tiempo estimado de presentación:** 15 minutos  
+**Costo estimado de la demo:** < $0.10 USD  
+**Nivel de dificultad:** Intermedio  
+**Requisitos:** AWS Academy, Terraform, Python 3, boto3
 
 ¡Listo para impresionar! 🚀
